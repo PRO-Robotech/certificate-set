@@ -1,0 +1,126 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: certificatesets.in-cloud.io
+spec:
+  conversion:
+    strategy: None
+  group: in-cloud.io
+  names:
+    categories:
+    - composite
+    kind: CertificateSet
+    listKind: CertificateSetList
+    plural: certificatesets
+    shortNames:
+    - certset
+    singular: certificateset
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: SYNCED
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: CertificateSet is the Schema for the certificatesets API.
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            properties:
+              name:
+                maxLength: 63
+                type: string
+            type: object
+          spec:
+            properties:
+              argocdCluster:
+                description: Enabler for creation secret with cluster credentials for ArgoCD
+                type: boolean
+              environment:
+                description: Cluster environment for certificates
+                type: string
+                enum:
+                - client
+                - infra
+                - system
+              issuerRef:
+                description: issuer reference for cluster certificates such as KubeAPI, ETCD and Proxy.
+                properties:
+                  apiVersion:
+                    default: cert-manager.io/v1
+                    description: API version of the issuer (group/version).
+                    type: string
+                  kind:
+                    default: ClusterIssuer
+                    description: Kind of the resource being referred to.
+                    type: string
+                  name:
+                    description: Name of the resource being referred to.
+                    type: string
+                required:
+                - name
+                type: object
+              issuerRefOidc:
+                description: issuer reference for OIDC certificates.
+                properties:
+                  apiVersion:
+                    default: cert-manager.io/v1
+                    description: API version of the issuer (group/version).
+                    type: string
+                  kind:
+                    default: ClusterIssuer
+                    description: Kind of the resource being referred to.
+                    type: string
+                  name:
+                    description: Name of the resource being referred to.
+                    type: string
+                required:
+                - name
+                type: object
+            type: object
+          status:
+            properties:
+              conditions:
+                description: Conditions of the resource.
+                items:
+                  properties:
+                    lastTransitionTime:
+                      format: date-time
+                      type: string
+                    message:
+                      type: string
+                    reason:
+                      type: string
+                    status:
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

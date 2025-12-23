@@ -1,0 +1,19 @@
+---
+apiVersion: in-cloud.io/v1alpha1
+kind: CertificateSet
+metadata:
+  annotations: ${ANNOTATIONS}
+  labels: ${LABELS}
+  name: testcluster1-infra
+  namespace: dlputim6
+spec:
+  argocdCluster: true
+  environment: infra
+  issuerRef:
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    name: self-signed-issuer
+  issuerRefOidc:
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    name: self-signed-issuer

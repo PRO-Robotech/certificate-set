@@ -1,0 +1,16 @@
+---
+apiVersion: in-cloud.io/v1alpha1
+kind: CertificateSet
+metadata:
+  annotations: ${ANNOTATIONS}
+  labels: ${LABELS}
+  name: testcluster1-client
+  namespace: dlputim6
+spec:
+  argocdCluster: true
+  environment: client
+  issuerRef:
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    name: self-signed-issuer
+  kubeconfigEndpoint: https://217.12.37.122:26443

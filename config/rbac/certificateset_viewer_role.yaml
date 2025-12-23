@@ -1,0 +1,29 @@
+# This rule is not used by the project certs itself.
+# It is provided to allow the cluster admin to help manage permissions for users.
+#
+# Grants read-only access to in-cloud.io resources.
+# This role is intended for users who need visibility into these resources
+# without permissions to modify them. It is ideal for monitoring purposes and limited-access viewing.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: certs
+    app.kubernetes.io/managed-by: kustomize
+  name: certificateset-viewer-role
+rules:
+- apiGroups:
+  - in-cloud.io
+  resources:
+  - certificatesets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - in-cloud.io
+  resources:
+  - certificatesets/status
+  verbs:
+  - get
