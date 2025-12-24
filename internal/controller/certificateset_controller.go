@@ -169,8 +169,6 @@ func (r *CertificateSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			_ = r.Status().Update(ctx, cs)
 			return ctrl.Result{}, err
 		}
-	} else {
-		log.Info("Neither kubeconfig nor argocdCluster enabled, only CA created")
 	}
 
 	if !cs.Spec.ArgocdCluster {
@@ -198,41 +196,25 @@ func (r *CertificateSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 }
 
 func (r *CertificateSetReconciler) reconcileCA(ctx context.Context, cs *incloudiov1alpha1.CertificateSet) error {
-	caCert := buildCACertificate(cs)
-	if err := controllerutil.SetControllerReference(cs, caCert, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set owner reference on CA Certificate: %w", err)
-	}
-	if err := r.createIfNotExists(ctx, caCert); err != nil {
-		return fmt.Errorf("failed to create CA Certificate: %w", err)
+	if err := r.createOrUpdateCertificate(ctx, cs, buildCACertificate(cs)); err != nil {
+		return fmt.Errorf("failed to reconcile CA Certificate: %w", err)
 	}
 
 	// Create additional certificates for system/infra environments
 	if isSystemOrInfra(cs.Spec.Environment) {
 		// ETCD Certificate
-		etcdCert := buildETCDCertificate(cs)
-		if err := controllerutil.SetControllerReference(cs, etcdCert, r.Scheme); err != nil {
-			return fmt.Errorf("failed to set owner reference on ETCD Certificate: %w", err)
-		}
-		if err := r.createIfNotExists(ctx, etcdCert); err != nil {
-			return fmt.Errorf("failed to create ETCD Certificate: %w", err)
+		if err := r.createOrUpdateCertificate(ctx, cs, buildETCDCertificate(cs)); err != nil {
+			return fmt.Errorf("failed to reconcile ETCD Certificate: %w", err)
 		}
 
 		// Proxy Certificate
-		proxyCert := buildProxyCertificate(cs)
-		if err := controllerutil.SetControllerReference(cs, proxyCert, r.Scheme); err != nil {
-			return fmt.Errorf("failed to set owner reference on Proxy Certificate: %w", err)
-		}
-		if err := r.createIfNotExists(ctx, proxyCert); err != nil {
-			return fmt.Errorf("failed to create Proxy Certificate: %w", err)
+		if err := r.createOrUpdateCertificate(ctx, cs, buildProxyCertificate(cs)); err != nil {
+			return fmt.Errorf("failed to reconcile Proxy Certificate: %w", err)
 		}
 
 		// OIDC Certificate
-		oidcCert := buildOIDCCertificate(cs)
-		if err := controllerutil.SetControllerReference(cs, oidcCert, r.Scheme); err != nil {
-			return fmt.Errorf("failed to set owner reference on OIDC Certificate: %w", err)
-		}
-		if err := r.createIfNotExists(ctx, oidcCert); err != nil {
-			return fmt.Errorf("failed to create OIDC Certificate: %w", err)
+		if err := r.createOrUpdateCertificate(ctx, cs, buildOIDCCertificate(cs)); err != nil {
+			return fmt.Errorf("failed to reconcile OIDC Certificate: %w", err)
 		}
 	}
 
@@ -241,11 +223,8 @@ func (r *CertificateSetReconciler) reconcileCA(ctx context.Context, cs *incloudi
 
 func (r *CertificateSetReconciler) reconcileIssuer(ctx context.Context, cs *incloudiov1alpha1.CertificateSet) (string, error) {
 	issuer := buildIssuer(cs)
-	if err := controllerutil.SetControllerReference(cs, issuer, r.Scheme); err != nil {
-		return "", fmt.Errorf("failed to set owner reference on Issuer: %w", err)
-	}
-	if err := r.createIfNotExists(ctx, issuer); err != nil {
-		return "", fmt.Errorf("failed to create Issuer: %w", err)
+	if err := r.createOrUpdateIssuer(ctx, cs, issuer); err != nil {
+		return "", fmt.Errorf("failed to reconcile Issuer: %w", err)
 	}
 
 	return issuer.Name, nil
@@ -255,13 +234,9 @@ func (r *CertificateSetReconciler) reconcilePhase2(ctx context.Context, cs *incl
 	log := logf.FromContext(ctx)
 	log.Info("Phase 2: Creating client certificates")
 
-	// Create super-admin Certificate (always)
-	superAdminCert := buildSuperAdminCertificate(cs, issuerName)
-	if err := controllerutil.SetControllerReference(cs, superAdminCert, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set owner reference on super-admin Certificate: %w", err)
-	}
-	if err := r.createIfNotExists(ctx, superAdminCert); err != nil {
-		return fmt.Errorf("failed to create super-admin Certificate: %w", err)
+	// Create super-admin Certificate
+	if err := r.createOrUpdateCertificate(ctx, cs, buildSuperAdminCertificate(cs, issuerName)); err != nil {
+		return fmt.Errorf("failed to reconcile super-admin Certificate: %w", err)
 	}
 
 	return nil
@@ -343,26 +318,75 @@ func (r *CertificateSetReconciler) getCertificateData(ctx context.Context, names
 	}, nil
 }
 
-func (r *CertificateSetReconciler) createIfNotExists(ctx context.Context, obj client.Object) error {
+func (r *CertificateSetReconciler) createOrUpdateCertificate(ctx context.Context, cs *incloudiov1alpha1.CertificateSet, desired *certmanagerv1.Certificate) error {
 	log := logf.FromContext(ctx)
 
-	existing := obj.DeepCopyObject().(client.Object)
-	err := r.Get(ctx, types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing)
-	if err == nil {
-		return nil
+	existing := &certmanagerv1.Certificate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      desired.Name,
+			Namespace: desired.Namespace,
+		},
 	}
 
-	if !apierrors.IsNotFound(err) {
-		return err
-	}
-
-	log.Info("Creating resource", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
-	if err := r.Create(ctx, obj); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return nil
+	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, existing, func() error {
+		// Set OwnerReference
+		if err := controllerutil.SetControllerReference(cs, existing, r.Scheme); err != nil {
+			return err
 		}
 
-		return err
+		// Copy labels and annotations
+		existing.Labels = desired.Labels
+		existing.Annotations = desired.Annotations
+
+		// Copy spec
+		existing.Spec = desired.Spec
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to create/update Certificate %s: %w", desired.Name, err)
+	}
+
+	if op != controllerutil.OperationResultNone {
+		log.Info("Certificate reconciled", "name", desired.Name, "operation", op)
+	}
+
+	return nil
+}
+
+func (r *CertificateSetReconciler) createOrUpdateIssuer(ctx context.Context, cs *incloudiov1alpha1.CertificateSet, desired *certmanagerv1.Issuer) error {
+	log := logf.FromContext(ctx)
+
+	existing := &certmanagerv1.Issuer{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      desired.Name,
+			Namespace: desired.Namespace,
+		},
+	}
+
+	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, existing, func() error {
+		// Set OwnerReference
+		if err := controllerutil.SetControllerReference(cs, existing, r.Scheme); err != nil {
+			return err
+		}
+
+		// Copy labels and annotations
+		existing.Labels = desired.Labels
+		existing.Annotations = desired.Annotations
+
+		// Copy spec
+		existing.Spec = desired.Spec
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to create/update Issuer %s: %w", desired.Name, err)
+	}
+
+	if op != controllerutil.OperationResultNone {
+		log.Info("Issuer reconciled", "name", desired.Name, "operation", op)
 	}
 
 	return nil
