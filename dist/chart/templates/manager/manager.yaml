@@ -76,5 +76,4 @@ spec:
             tolerations:
               {{- toYaml . | nindent 14 }}
             {{- end }}
-
             volumes: []

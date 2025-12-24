@@ -34,7 +34,7 @@ const (
 )
 
 // CertificateSetSpec defines the desired state of CertificateSet
-// +kubebuilder:validation:XValidation:rule="(!self.kubeconfig && (!has(self.argocdCluster) || !self.argocdCluster)) || (has(self.kubeconfigEndpoint) && self.kubeconfigEndpoint !=”)",message="kubeconfigEndpoint is required when kubeconfig or argocdCluster is enabled"
+// +kubebuilder:validation:XValidation:rule="(!self.kubeconfig && (!has(self.argocdCluster) || !self.argocdCluster)) || (has(self.kubeconfigEndpoint) && self.kubeconfigEndpoint !='')",message="kubeconfigEndpoint is required when kubeconfig or argocdCluster is enabled"
 type CertificateSetSpec struct {
 	// ArgocdCluster enables creation of a secret with cluster credentials for ArgoCD
 	// +optional

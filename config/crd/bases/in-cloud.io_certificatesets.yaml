@@ -117,7 +117,7 @@ spec:
             - message: kubeconfigEndpoint is required when kubeconfig or argocdCluster
                 is enabled
               rule: (!self.kubeconfig && (!has(self.argocdCluster) || !self.argocdCluster))
-                || (has(self.kubeconfigEndpoint) && self.kubeconfigEndpoint != '')
+                || (has(self.kubeconfigEndpoint) && self.kubeconfigEndpoint !='')
           status:
             description: status defines the observed state of CertificateSet
             properties:
