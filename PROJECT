@@ -6,6 +6,10 @@ cliVersion: 4.10.1
 domain: in-cloud.io
 layout:
 - go.kubebuilder.io/v4
+plugins:
+  helm.kubebuilder.io/v2-alpha:
+    manifests: dist/install.yaml
+    output: dist
 projectName: certs
 repo: certificate-set
 resources:
