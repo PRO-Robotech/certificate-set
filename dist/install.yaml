@@ -52,13 +52,17 @@ spec:
                   credentials for ArgoCD
                 type: boolean
               environment:
-                description: 'Environment specifies which certificate set to generate:
-                  client, system, or infra'
+                description: |-
+                  Environment specifies which certificate set to generate: client, system, or infra.
+                  This field is immutable after creation.
                 enum:
                 - client
                 - system
                 - infra
                 type: string
+                x-kubernetes-validations:
+                - message: environment is immutable after creation
+                  rule: self == oldSelf
               issuerRef:
                 description: IssuerRef references the cert-manager issuer for main
                   certificates
@@ -97,14 +101,31 @@ spec:
                 required:
                 - name
                 type: object
+              kubeconfig:
+                description: Kubeconfig enables creation of kubeconfig secret. This
+                  field is immutable after creation.
+                type: boolean
+                x-kubernetes-validations:
+                - message: kubeconfig is immutable after creation
+                  rule: self == oldSelf
               kubeconfigEndpoint:
-                description: KubeconfigEndpoint is the API server URL for kubeconfig
-                  generation
+                description: |-
+                  KubeconfigEndpoint is the API server URL for kubeconfig generation.
+                  Once set, this field cannot be changed (but can be initially empty).
                 type: string
+                x-kubernetes-validations:
+                - message: kubeconfigEndpoint cannot be changed once set
+                  rule: oldSelf == '' || self == oldSelf
             required:
             - environment
             - issuerRef
+            - kubeconfig
             type: object
+            x-kubernetes-validations:
+            - message: kubeconfigEndpoint is required when kubeconfig or argocdCluster
+                is enabled
+              rule: (!self.kubeconfig && !self.argocdCluster) || (has(self.kubeconfigEndpoint)
+                && self.kubeconfigEndpoint != '')
           status:
             description: status defines the observed state of CertificateSet
             properties:
@@ -307,6 +328,14 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - secrets
   verbs:
   - create
@@ -477,9 +506,11 @@ spec:
         - --metrics-bind-address=:8443
         - --leader-elect
         - --health-probe-bind-address=:8081
+        - --cluster-wide
         command:
         - /manager
         image: controller:latest
+        imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
             path: /healthz
