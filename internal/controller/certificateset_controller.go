@@ -62,6 +62,7 @@ type CertificateSetReconciler struct {
 	Scheme    *runtime.Scheme
 	APIReader client.Reader // Non-caching reader for direct API server reads
 }
+
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=in-cloud.io,resources=certificatesets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=in-cloud.io,resources=certificatesets/status,verbs=get;update;patch
@@ -205,34 +206,6 @@ func (r *CertificateSetReconciler) reconcileCA(ctx context.Context, cs *incloudi
 		return fmt.Errorf("failed to create CA Certificate: %w", err)
 	}
 
-	return nil
-}
-
-func (r *CertificateSetReconciler) reconcileIssuer(ctx context.Context, cs *incloudiov1alpha1.CertificateSet) (string, error) {
-	issuer := buildIssuer(cs)
-	if err := controllerutil.SetControllerReference(cs, issuer, r.Scheme); err != nil {
-		return "", fmt.Errorf("failed to set owner reference on Issuer: %w", err)
-	}
-	if err := r.createIfNotExists(ctx, issuer); err != nil {
-		return "", fmt.Errorf("failed to create Issuer: %w", err)
-	}
-
-	return issuer.Name, nil
-}
-
-func (r *CertificateSetReconciler) reconcilePhase2(ctx context.Context, cs *incloudiov1alpha1.CertificateSet, issuerName string) error {
-	log := logf.FromContext(ctx)
-	log.Info("Phase 2: Creating client certificates")
-
-	// Create super-admin Certificate (always)
-	superAdminCert := buildSuperAdminCertificate(cs, issuerName)
-	if err := controllerutil.SetControllerReference(cs, superAdminCert, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set owner reference on super-admin Certificate: %w", err)
-	}
-	if err := r.createIfNotExists(ctx, superAdminCert); err != nil {
-		return fmt.Errorf("failed to create super-admin Certificate: %w", err)
-	}
-
 	// Create additional certificates for system/infra environments
 	if isSystemOrInfra(cs.Spec.Environment) {
 		// ETCD Certificate
@@ -261,6 +234,34 @@ func (r *CertificateSetReconciler) reconcilePhase2(ctx context.Context, cs *incl
 		if err := r.createIfNotExists(ctx, oidcCert); err != nil {
 			return fmt.Errorf("failed to create OIDC Certificate: %w", err)
 		}
+	}
+
+	return nil
+}
+
+func (r *CertificateSetReconciler) reconcileIssuer(ctx context.Context, cs *incloudiov1alpha1.CertificateSet) (string, error) {
+	issuer := buildIssuer(cs)
+	if err := controllerutil.SetControllerReference(cs, issuer, r.Scheme); err != nil {
+		return "", fmt.Errorf("failed to set owner reference on Issuer: %w", err)
+	}
+	if err := r.createIfNotExists(ctx, issuer); err != nil {
+		return "", fmt.Errorf("failed to create Issuer: %w", err)
+	}
+
+	return issuer.Name, nil
+}
+
+func (r *CertificateSetReconciler) reconcilePhase2(ctx context.Context, cs *incloudiov1alpha1.CertificateSet, issuerName string) error {
+	log := logf.FromContext(ctx)
+	log.Info("Phase 2: Creating client certificates")
+
+	// Create super-admin Certificate (always)
+	superAdminCert := buildSuperAdminCertificate(cs, issuerName)
+	if err := controllerutil.SetControllerReference(cs, superAdminCert, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set owner reference on super-admin Certificate: %w", err)
+	}
+	if err := r.createIfNotExists(ctx, superAdminCert); err != nil {
+		return fmt.Errorf("failed to create super-admin Certificate: %w", err)
 	}
 
 	return nil
