@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,9 +71,26 @@ var _ = BeforeSuite(func() {
 		ErrorIfCRDPathMissing: true,
 	}
 
-	// Retrieve the first found binary directory to allow running tests from IDEs
-	if getFirstFoundEnvTestBinaryDir() != "" {
-		testEnv.BinaryAssetsDirectory = getFirstFoundEnvTestBinaryDir()
+	// Try to locate envtest assets. If not found locally, skip (unless CI requires them).
+	assetsDir := getFirstFoundEnvTestBinaryDir()
+	if assetsDir == "" {
+		assetsDir = os.Getenv("KUBEBUILDER_ASSETS")
+	}
+	if assetsDir == "" {
+		// controller-runtime default on many machines
+		assetsDir = "/usr/local/kubebuilder/bin"
+	}
+	if assetsDir != "" && envtestBinariesPresent(assetsDir) {
+		testEnv.BinaryAssetsDirectory = assetsDir
+	} else {
+		msg := fmt.Sprintf(
+			"envtest assets not found (need kube-apiserver/etcd/kubectl). " +
+				"Set KUBEBUILDER_ASSETS or install assets under ../../bin/k8s/<version> or /usr/local/kubebuilder/bin",
+		)
+		if os.Getenv("CI") != "" || os.Getenv("REQUIRE_ENVTEST_ASSETS") != "" {
+			Fail(msg)
+		}
+		Skip(msg)
 	}
 
 	// cfg is defined in this file globally.
@@ -113,4 +131,14 @@ func getFirstFoundEnvTestBinaryDir() string {
 		}
 	}
 	return ""
+}
+
+func envtestBinariesPresent(dir string) bool {
+	required := []string{"kube-apiserver", "etcd", "kubectl"}
+	for _, name := range required {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			return false
+		}
+	}
+	return true
 }

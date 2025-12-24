@@ -180,8 +180,10 @@ func main() {
 		// Per-namespace filter
 		if watchNamespace != "" {
 			setupLog.Info("Filtering by namespace", "namespace", watchNamespace)
+			// Include both watch namespace and ArgoCD namespace for cross-namespace secret management
 			cacheOptions.DefaultNamespaces = map[string]cache.Config{
-				watchNamespace: {},
+				watchNamespace:             {},
+				controller.ArgoCDNamespace: {}, // Required for ArgoCD cluster secrets
 			}
 		}
 
@@ -215,8 +217,9 @@ func main() {
 	}
 
 	if err := (&controller.CertificateSetReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		APIReader: mgr.GetAPIReader(), // Non-caching reader for direct API server reads
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CertificateSet")
 		os.Exit(1)

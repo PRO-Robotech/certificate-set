@@ -18,6 +18,7 @@ package controller
 
 import (
 	"fmt"
+	"maps"
 
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
@@ -28,6 +29,16 @@ import (
 	incloudiov1alpha1 "certificate-set/api/v1alpha1"
 )
 
+func copyAnnotationsForChildResource(source map[string]string) map[string]string {
+	result := make(map[string]string)
+	for k, v := range source {
+		if k != "kubectl.kubernetes.io/last-applied-configuration" {
+			result[k] = v
+		}
+	}
+	return result
+}
+
 // CertificateData contains data extracted from a cert-manager generated Secret
 type CertificateData struct {
 	CACert  string // base64-encoded CA certificate
@@ -35,7 +46,6 @@ type CertificateData struct {
 	TLSKey  string // base64-encoded TLS private key
 }
 
-// buildCACertificate creates a CA Certificate resource
 func buildCACertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.Certificate {
 	gv, _ := schema.ParseGroupVersion(cs.Spec.IssuerRef.APIVersion)
 
@@ -44,7 +54,7 @@ func buildCACertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.Cer
 			Name:        fmt.Sprintf("%s-ca", cs.Name),
 			Namespace:   cs.Namespace,
 			Labels:      cs.Labels,
-			Annotations: cs.Annotations,
+			Annotations: copyAnnotationsForChildResource(cs.Annotations),
 		},
 		Spec: certmanagerv1.CertificateSpec{
 			CommonName: fmt.Sprintf("%s-ca", cs.Name),
@@ -74,14 +84,13 @@ func buildCACertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.Cer
 	}
 }
 
-// buildIssuer creates an Issuer resource that uses the CA Secret
 func buildIssuer(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.Issuer {
 	return &certmanagerv1.Issuer{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        fmt.Sprintf("%s-ca", cs.Name),
 			Namespace:   cs.Namespace,
 			Labels:      cs.Labels,
-			Annotations: cs.Annotations,
+			Annotations: copyAnnotationsForChildResource(cs.Annotations),
 		},
 		Spec: certmanagerv1.IssuerSpec{
 			IssuerConfig: certmanagerv1.IssuerConfig{
@@ -93,22 +102,18 @@ func buildIssuer(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.Issuer {
 	}
 }
 
-// buildSuperAdminCertificate creates the super-admin client Certificate
 func buildSuperAdminCertificate(cs *incloudiov1alpha1.CertificateSet, issuerName string) *certmanagerv1.Certificate {
 	return &certmanagerv1.Certificate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        fmt.Sprintf("%s-super-admin", cs.Name),
 			Namespace:   cs.Namespace,
 			Labels:      cs.Labels,
-			Annotations: cs.Annotations,
+			Annotations: copyAnnotationsForChildResource(cs.Annotations),
 		},
 		Spec: certmanagerv1.CertificateSpec{
 			CommonName: fmt.Sprintf("%s-super-admin", cs.Name),
 			Duration:   &metav1.Duration{Duration: 8760 * 60 * 60 * 1000000000}, // 8760h (1 year)
-			IPAddresses: []string{
-				"127.0.0.1",
-			},
-			IsCA: false,
+			IsCA:       false,
 			IssuerRef: cmmeta.ObjectReference{
 				Group: certmanagerv1.SchemeGroupVersion.Group,
 				Kind:  certmanagerv1.IssuerKind,
@@ -136,7 +141,6 @@ func buildSuperAdminCertificate(cs *incloudiov1alpha1.CertificateSet, issuerName
 	}
 }
 
-// buildETCDCertificate creates the ETCD CA Certificate (for system/infra environments)
 func buildETCDCertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.Certificate {
 	gv, _ := schema.ParseGroupVersion(cs.Spec.IssuerRef.APIVersion)
 
@@ -145,7 +149,7 @@ func buildETCDCertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.C
 			Name:        fmt.Sprintf("%s-etcd", cs.Name),
 			Namespace:   cs.Namespace,
 			Labels:      cs.Labels,
-			Annotations: cs.Annotations,
+			Annotations: copyAnnotationsForChildResource(cs.Annotations),
 		},
 		Spec: certmanagerv1.CertificateSpec{
 			CommonName: fmt.Sprintf("%s-etcd", cs.Name),
@@ -175,7 +179,6 @@ func buildETCDCertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.C
 	}
 }
 
-// buildProxyCertificate creates the Proxy CA Certificate (for system/infra environments)
 func buildProxyCertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.Certificate {
 	gv, _ := schema.ParseGroupVersion(cs.Spec.IssuerRef.APIVersion)
 
@@ -184,7 +187,7 @@ func buildProxyCertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.
 			Name:        fmt.Sprintf("%s-proxy", cs.Name),
 			Namespace:   cs.Namespace,
 			Labels:      cs.Labels,
-			Annotations: cs.Annotations,
+			Annotations: copyAnnotationsForChildResource(cs.Annotations),
 		},
 		Spec: certmanagerv1.CertificateSpec{
 			CommonName: fmt.Sprintf("%s-proxy", cs.Name),
@@ -214,16 +217,13 @@ func buildProxyCertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.
 	}
 }
 
-// buildOIDCCertificate creates the OIDC Certificate (for system/infra environments)
-// For "system": isCA=true, uses issuerRef (self-signed)
-// For "infra": isCA=false, uses issuerRefOidc (external issuer)
 func buildOIDCCertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.Certificate {
 	cert := &certmanagerv1.Certificate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        fmt.Sprintf("%s-ca-oidc", cs.Name),
 			Namespace:   cs.Namespace,
 			Labels:      cs.Labels,
-			Annotations: cs.Annotations,
+			Annotations: copyAnnotationsForChildResource(cs.Annotations),
 		},
 		Spec: certmanagerv1.CertificateSpec{
 			CommonName: fmt.Sprintf("%s-ca-oidc", cs.Name),
@@ -270,7 +270,6 @@ func buildOIDCCertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.C
 	return cert
 }
 
-// buildKubeconfigSecret creates the kubeconfig Secret using certificate data
 func buildKubeconfigSecret(cs *incloudiov1alpha1.CertificateSet, certData CertificateData) *corev1.Secret {
 	kubeconfigTemplate := `apiVersion: v1
 clusters:
@@ -291,7 +290,6 @@ users:
         client-certificate-data: %s
         client-key-data: %s`
 
-	// CertificateData already contains base64-encoded values
 	kubeconfigContent := fmt.Sprintf(kubeconfigTemplate,
 		certData.CACert,
 		cs.Spec.KubeconfigEndpoint,
@@ -308,27 +306,23 @@ users:
 	)
 
 	labels := make(map[string]string)
-	for k, v := range cs.Labels {
-		labels[k] = v
-	}
+	maps.Copy(labels, cs.Labels)
 
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        fmt.Sprintf("%s-kubeconfig", cs.Name),
 			Namespace:   cs.Namespace,
 			Labels:      labels,
-			Annotations: cs.Annotations,
+			Annotations: copyAnnotationsForChildResource(cs.Annotations),
 		},
 		Type: corev1.SecretTypeOpaque,
-		StringData: map[string]string{
-			"value": kubeconfigContent,
+		Data: map[string][]byte{
+			"value": []byte(kubeconfigContent),
 		},
 	}
 }
 
-// buildArgoCDClusterSecret creates the ArgoCD cluster Secret
 func buildArgoCDClusterSecret(cs *incloudiov1alpha1.CertificateSet, certData CertificateData) *corev1.Secret {
-	// CertificateData already contains base64-encoded values
 	configTemplate := `{
   "tlsClientConfig": {
     "caData": "%s",
@@ -341,9 +335,8 @@ func buildArgoCDClusterSecret(cs *incloudiov1alpha1.CertificateSet, certData Cer
 	configContent := fmt.Sprintf(configTemplate, certData.CACert, certData.TLSCert, certData.TLSKey)
 
 	labels := make(map[string]string)
-	for k, v := range cs.Labels {
-		labels[k] = v
-	}
+	maps.Copy(labels, cs.Labels)
+
 	// Add ArgoCD label for cluster secret discovery
 	labels["argocd.argoproj.io/secret-type"] = "cluster"
 
@@ -352,18 +345,17 @@ func buildArgoCDClusterSecret(cs *incloudiov1alpha1.CertificateSet, certData Cer
 			Name:        fmt.Sprintf("%s-argocd-cluster", cs.Name),
 			Namespace:   ArgoCDNamespace,
 			Labels:      labels,
-			Annotations: cs.Annotations,
+			Annotations: copyAnnotationsForChildResource(cs.Annotations),
 		},
 		Type: corev1.SecretTypeOpaque,
-		StringData: map[string]string{
-			"config": configContent,
-			"name":   cs.Name,
-			"server": cs.Spec.KubeconfigEndpoint,
+		Data: map[string][]byte{
+			"config": []byte(configContent),
+			"name":   []byte(cs.Name),
+			"server": []byte(cs.Spec.KubeconfigEndpoint),
 		},
 	}
 }
 
-// isSystemOrInfra checks if the environment requires additional certificates
 func isSystemOrInfra(environment incloudiov1alpha1.EnvironmentType) bool {
 	return environment == incloudiov1alpha1.EnvironmentSystem || environment == incloudiov1alpha1.EnvironmentInfra
 }

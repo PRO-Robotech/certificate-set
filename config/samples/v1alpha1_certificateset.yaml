@@ -11,4 +11,5 @@ spec:
     apiVersion: cert-manager.io/v1
     kind: ClusterIssuer
     name: selfsigned-issuer
+  kubeconfig: true
   kubeconfigEndpoint: "https://example-cluster.example.com:6443"

@@ -59,7 +59,8 @@ const (
 // CertificateSetReconciler reconciles a CertificateSet object
 type CertificateSetReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme    *runtime.Scheme
+	APIReader client.Reader // Non-caching reader for direct API server reads
 }
 
 // +kubebuilder:rbac:groups=in-cloud.io,resources=certificatesets,verbs=get;list;watch;create;update;patch;delete
@@ -105,16 +106,11 @@ func (r *CertificateSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	log.Info("Reconciling CertificateSet", "name", cs.Name, "namespace", cs.Namespace)
 
-	// Update status to Progressing
-	if err := r.setCondition(ctx, cs, ConditionTypeProgressing, metav1.ConditionTrue, "Reconciling", "Creating certificate resources"); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Phase 1: Create CA Certificate and Issuer
-	issuerName, err := r.reconcilePhase1(ctx, cs)
-	if err != nil {
-		log.Error(err, "Phase 1 failed")
-		_ = r.setCondition(ctx, cs, ConditionTypeDegraded, metav1.ConditionTrue, "Phase1Failed", err.Error())
+	// Phase 1: Create CA Certificate (ALWAYS)
+	if err := r.reconcileCA(ctx, cs); err != nil {
+		log.Error(err, "CA creation failed")
+		r.setCondition(cs, ConditionTypeDegraded, metav1.ConditionTrue, "CAFailed", err.Error())
+		_ = r.Status().Update(ctx, cs)
 		return ctrl.Result{}, err
 	}
 
@@ -128,78 +124,102 @@ func (r *CertificateSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
 	}
 
-	// Phase 2: Create client certificates
-	if err := r.reconcilePhase2(ctx, cs, issuerName); err != nil {
-		log.Error(err, "Phase 2 failed")
-		_ = r.setCondition(ctx, cs, ConditionTypeDegraded, metav1.ConditionTrue, "Phase2Failed", err.Error())
-		return ctrl.Result{}, err
+	needsClientCerts := cs.Spec.Kubeconfig || cs.Spec.ArgocdCluster
+	if needsClientCerts {
+		// Create Issuer (uses CA)
+		issuerName, err := r.reconcileIssuer(ctx, cs)
+		if err != nil {
+			log.Error(err, "Issuer creation failed")
+			r.setCondition(cs, ConditionTypeDegraded, metav1.ConditionTrue, "IssuerFailed", err.Error())
+			_ = r.Status().Update(ctx, cs)
+			return ctrl.Result{}, err
+		}
+
+		// Phase 2: Create client certificates (super-admin)
+		if err := r.reconcilePhase2(ctx, cs, issuerName); err != nil {
+			log.Error(err, "Phase 2 failed")
+			r.setCondition(cs, ConditionTypeDegraded, metav1.ConditionTrue, "Phase2Failed", err.Error())
+			_ = r.Status().Update(ctx, cs)
+			return ctrl.Result{}, err
+		}
+
+		// Check if super-admin Secret is ready
+		superAdminSecretName := fmt.Sprintf("%s-super-admin", cs.Name)
+		superAdminReady, err := r.isSecretReady(ctx, cs.Namespace, superAdminSecretName)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !superAdminReady {
+			log.Info("Waiting for super-admin Secret to be created by cert-manager")
+			return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+		}
+
+		// Get certificate data from super-admin Secret
+		certData, err := r.getCertificateData(ctx, cs.Namespace, superAdminSecretName)
+		if err != nil {
+			log.Error(err, "Failed to get certificate data from super-admin Secret")
+			return ctrl.Result{}, err
+		}
+
+		// Phase 3: Create kubeconfig and ArgoCD secrets
+		if err := r.reconcilePhase3(ctx, cs, certData); err != nil {
+			log.Error(err, "Phase 3 failed")
+			r.setCondition(cs, ConditionTypeDegraded, metav1.ConditionTrue, "Phase3Failed", err.Error())
+			_ = r.Status().Update(ctx, cs)
+			return ctrl.Result{}, err
+		}
+	} else {
+		log.Info("Neither kubeconfig nor argocdCluster enabled, only CA created")
 	}
 
-	// Check if super-admin Secret is ready
-	superAdminSecretName := fmt.Sprintf("%s-super-admin", cs.Name)
-	superAdminReady, err := r.isSecretReady(ctx, cs.Namespace, superAdminSecretName)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !superAdminReady {
-		log.Info("Waiting for super-admin Secret to be created by cert-manager")
-		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
-	}
-
-	// Get certificate data from super-admin Secret
-	certData, err := r.getCertificateData(ctx, cs.Namespace, superAdminSecretName)
-	if err != nil {
-		log.Error(err, "Failed to get certificate data from super-admin Secret")
-		return ctrl.Result{}, err
+	if !cs.Spec.ArgocdCluster {
+		argocdSecretName := fmt.Sprintf("%s-argocd-cluster", cs.Name)
+		if err := r.deleteSecretIfExists(ctx, ArgoCDNamespace, argocdSecretName); err != nil {
+			log.Error(err, "Failed to delete ArgoCD cluster secret")
+			r.setCondition(cs, ConditionTypeDegraded, metav1.ConditionTrue, "ArgoCDCleanupFailed", err.Error())
+			_ = r.Status().Update(ctx, cs)
+			return ctrl.Result{}, err
+		}
 	}
 
-	// Phase 3: Create kubeconfig and ArgoCD secrets
-	if err := r.reconcilePhase3(ctx, cs, certData); err != nil {
-		log.Error(err, "Phase 3 failed")
-		_ = r.setCondition(ctx, cs, ConditionTypeDegraded, metav1.ConditionTrue, "Phase3Failed", err.Error())
-		return ctrl.Result{}, err
-	}
-
-	// All phases complete - set Ready condition
-	if err := r.setCondition(ctx, cs, ConditionTypeReady, metav1.ConditionTrue, "AllPhasesComplete", "All certificate resources created successfully"); err != nil {
-		return ctrl.Result{}, err
-	}
-	// Clear degraded condition if it was set
-	if err := r.setCondition(ctx, cs, ConditionTypeDegraded, metav1.ConditionFalse, "Healthy", "No errors"); err != nil {
+	// All phases complete - update conditions only if changed
+	statusChanged := false
+	statusChanged = r.setCondition(cs, ConditionTypeReady, metav1.ConditionTrue, "AllPhasesComplete", "All certificate resources created successfully") || statusChanged
+	statusChanged = r.setCondition(cs, ConditionTypeDegraded, metav1.ConditionFalse, "Healthy", "No errors") || statusChanged
+	statusChanged = r.setCondition(cs, ConditionTypeProgressing, metav1.ConditionFalse, "Complete", "Reconciliation complete") || statusChanged
+	if err := r.updateStatusIfNeeded(ctx, cs, statusChanged); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	log.Info("CertificateSet reconciliation complete", "name", cs.Name)
+
 	return ctrl.Result{}, nil
 }
 
-// reconcilePhase1 creates CA Certificate and Issuer
-func (r *CertificateSetReconciler) reconcilePhase1(ctx context.Context, cs *incloudiov1alpha1.CertificateSet) (string, error) {
-	log := logf.FromContext(ctx)
-	log.Info("Phase 1: Creating CA Certificate and Issuer")
-
-	// Create CA Certificate
+func (r *CertificateSetReconciler) reconcileCA(ctx context.Context, cs *incloudiov1alpha1.CertificateSet) error {
 	caCert := buildCACertificate(cs)
 	if err := controllerutil.SetControllerReference(cs, caCert, r.Scheme); err != nil {
-		return "", fmt.Errorf("failed to set owner reference on CA Certificate: %w", err)
+		return fmt.Errorf("failed to set owner reference on CA Certificate: %w", err)
 	}
-	if err := r.createOrUpdate(ctx, caCert); err != nil {
-		return "", fmt.Errorf("failed to create/update CA Certificate: %w", err)
+	if err := r.createIfNotExists(ctx, caCert); err != nil {
+		return fmt.Errorf("failed to create CA Certificate: %w", err)
 	}
 
-	// Create Issuer
+	return nil
+}
+
+func (r *CertificateSetReconciler) reconcileIssuer(ctx context.Context, cs *incloudiov1alpha1.CertificateSet) (string, error) {
 	issuer := buildIssuer(cs)
 	if err := controllerutil.SetControllerReference(cs, issuer, r.Scheme); err != nil {
 		return "", fmt.Errorf("failed to set owner reference on Issuer: %w", err)
 	}
-	if err := r.createOrUpdate(ctx, issuer); err != nil {
-		return "", fmt.Errorf("failed to create/update Issuer: %w", err)
+	if err := r.createIfNotExists(ctx, issuer); err != nil {
+		return "", fmt.Errorf("failed to create Issuer: %w", err)
 	}
 
 	return issuer.Name, nil
 }
 
-// reconcilePhase2 creates client certificates
 func (r *CertificateSetReconciler) reconcilePhase2(ctx context.Context, cs *incloudiov1alpha1.CertificateSet, issuerName string) error {
 	log := logf.FromContext(ctx)
 	log.Info("Phase 2: Creating client certificates")
@@ -209,8 +229,8 @@ func (r *CertificateSetReconciler) reconcilePhase2(ctx context.Context, cs *incl
 	if err := controllerutil.SetControllerReference(cs, superAdminCert, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set owner reference on super-admin Certificate: %w", err)
 	}
-	if err := r.createOrUpdate(ctx, superAdminCert); err != nil {
-		return fmt.Errorf("failed to create/update super-admin Certificate: %w", err)
+	if err := r.createIfNotExists(ctx, superAdminCert); err != nil {
+		return fmt.Errorf("failed to create super-admin Certificate: %w", err)
 	}
 
 	// Create additional certificates for system/infra environments
@@ -220,8 +240,8 @@ func (r *CertificateSetReconciler) reconcilePhase2(ctx context.Context, cs *incl
 		if err := controllerutil.SetControllerReference(cs, etcdCert, r.Scheme); err != nil {
 			return fmt.Errorf("failed to set owner reference on ETCD Certificate: %w", err)
 		}
-		if err := r.createOrUpdate(ctx, etcdCert); err != nil {
-			return fmt.Errorf("failed to create/update ETCD Certificate: %w", err)
+		if err := r.createIfNotExists(ctx, etcdCert); err != nil {
+			return fmt.Errorf("failed to create ETCD Certificate: %w", err)
 		}
 
 		// Proxy Certificate
@@ -229,8 +249,8 @@ func (r *CertificateSetReconciler) reconcilePhase2(ctx context.Context, cs *incl
 		if err := controllerutil.SetControllerReference(cs, proxyCert, r.Scheme); err != nil {
 			return fmt.Errorf("failed to set owner reference on Proxy Certificate: %w", err)
 		}
-		if err := r.createOrUpdate(ctx, proxyCert); err != nil {
-			return fmt.Errorf("failed to create/update Proxy Certificate: %w", err)
+		if err := r.createIfNotExists(ctx, proxyCert); err != nil {
+			return fmt.Errorf("failed to create Proxy Certificate: %w", err)
 		}
 
 		// OIDC Certificate
@@ -238,47 +258,63 @@ func (r *CertificateSetReconciler) reconcilePhase2(ctx context.Context, cs *incl
 		if err := controllerutil.SetControllerReference(cs, oidcCert, r.Scheme); err != nil {
 			return fmt.Errorf("failed to set owner reference on OIDC Certificate: %w", err)
 		}
-		if err := r.createOrUpdate(ctx, oidcCert); err != nil {
-			return fmt.Errorf("failed to create/update OIDC Certificate: %w", err)
+		if err := r.createIfNotExists(ctx, oidcCert); err != nil {
+			return fmt.Errorf("failed to create OIDC Certificate: %w", err)
 		}
 	}
 
 	return nil
 }
 
-// reconcilePhase3 creates kubeconfig and ArgoCD secrets
 func (r *CertificateSetReconciler) reconcilePhase3(ctx context.Context, cs *incloudiov1alpha1.CertificateSet, certData CertificateData) error {
 	log := logf.FromContext(ctx)
 	log.Info("Phase 3: Creating kubeconfig and ArgoCD secrets")
 
-	// Create kubeconfig Secret (always, if endpoint is specified)
-	if cs.Spec.KubeconfigEndpoint != "" {
+	// Create kubeconfig Secret (only if kubeconfig is enabled)
+	if cs.Spec.Kubeconfig {
 		kubeconfigSecret := buildKubeconfigSecret(cs, certData)
 		if err := controllerutil.SetControllerReference(cs, kubeconfigSecret, r.Scheme); err != nil {
 			return fmt.Errorf("failed to set owner reference on kubeconfig Secret: %w", err)
 		}
-		if err := r.createOrUpdate(ctx, kubeconfigSecret); err != nil {
+
+		kubeconfigKeys := []string{"value"}
+		if err := r.createOrUpdateSecret(ctx, kubeconfigSecret, kubeconfigKeys); err != nil {
 			return fmt.Errorf("failed to create/update kubeconfig Secret: %w", err)
 		}
+	}
 
-		// Create ArgoCD cluster Secret (if enabled)
-		if cs.Spec.ArgocdCluster {
-			argocdSecret := buildArgoCDClusterSecret(cs, certData)
-			// Note: ArgoCD secret is in a different namespace, so we can't set owner reference
-			// It will need to be cleaned up separately or via finalizer
-			if err := r.createOrUpdate(ctx, argocdSecret); err != nil {
-				return fmt.Errorf("failed to create/update ArgoCD cluster Secret: %w", err)
+	if cs.Spec.ArgocdCluster {
+		// Check if ArgoCD namespace exists before creating secret
+		argocdNs := &corev1.Namespace{}
+		if err := r.APIReader.Get(ctx, types.NamespacedName{Name: ArgoCDNamespace}, argocdNs); err != nil {
+			if apierrors.IsNotFound(err) {
+				errMsg := fmt.Sprintf("ArgoCD namespace %q does not exist, cannot create ArgoCD cluster secret", ArgoCDNamespace)
+				log.Error(nil, errMsg)
+				r.setCondition(cs, "Ready", metav1.ConditionFalse, "ArgoCDNamespaceNotFound", errMsg)
+				if statusErr := r.Status().Update(ctx, cs); statusErr != nil {
+					log.Error(statusErr, "Failed to update status")
+				}
+
+				return fmt.Errorf("argocd namespace not found: %s", ArgoCDNamespace)
 			}
+
+			return fmt.Errorf("failed to check ArgoCD namespace: %w", err)
+		}
+
+		// Namespace exists, create the secret
+		argocdSecret := buildArgoCDClusterSecret(cs, certData)
+		argocdKeys := []string{"config", "name", "server"}
+		if err := r.createOrUpdateSecret(ctx, argocdSecret, argocdKeys); err != nil {
+			return fmt.Errorf("failed to create/update ArgoCD cluster Secret: %w", err)
 		}
 	}
 
 	return nil
 }
 
-// isSecretReady checks if a Secret exists and has the required certificate data
 func (r *CertificateSetReconciler) isSecretReady(ctx context.Context, namespace, name string) (bool, error) {
 	secret := &corev1.Secret{}
-	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret)
+	err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, nil
@@ -286,7 +322,6 @@ func (r *CertificateSetReconciler) isSecretReady(ctx context.Context, namespace,
 		return false, err
 	}
 
-	// Check if the secret has the required keys
 	_, hasCACrt := secret.Data["ca.crt"]
 	_, hasTLSCrt := secret.Data["tls.crt"]
 	_, hasTLSKey := secret.Data["tls.key"]
@@ -294,15 +329,12 @@ func (r *CertificateSetReconciler) isSecretReady(ctx context.Context, namespace,
 	return hasCACrt && hasTLSCrt && hasTLSKey, nil
 }
 
-// getCertificateData extracts certificate data from a Secret
 func (r *CertificateSetReconciler) getCertificateData(ctx context.Context, namespace, name string) (CertificateData, error) {
 	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret); err != nil {
+	if err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret); err != nil {
 		return CertificateData{}, err
 	}
 
-	// Data in Secret is already base64-decoded by Kubernetes
-	// We return it as base64-encoded strings for template use
 	return CertificateData{
 		CACert:  base64.StdEncoding.EncodeToString(secret.Data["ca.crt"]),
 		TLSCert: base64.StdEncoding.EncodeToString(secret.Data["tls.crt"]),
@@ -310,64 +342,130 @@ func (r *CertificateSetReconciler) getCertificateData(ctx context.Context, names
 	}, nil
 }
 
-// createOrUpdate creates or updates a resource using Server-Side Apply
-func (r *CertificateSetReconciler) createOrUpdate(ctx context.Context, obj client.Object) error {
+func (r *CertificateSetReconciler) createIfNotExists(ctx context.Context, obj client.Object) error {
 	log := logf.FromContext(ctx)
 
-	// Try to get the existing resource
 	existing := obj.DeepCopyObject().(client.Object)
 	err := r.Get(ctx, types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}, existing)
+	if err == nil {
+		return nil
+	}
 
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+
+	log.Info("Creating resource", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
+	if err := r.Create(ctx, obj); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return nil
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+func (r *CertificateSetReconciler) createOrUpdateSecret(ctx context.Context, secret *corev1.Secret, managedKeys []string) error {
+	log := logf.FromContext(ctx)
+
+	existing := &corev1.Secret{}
+	err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: secret.Namespace, Name: secret.Name}, existing)
 	if apierrors.IsNotFound(err) {
-		// Create new resource
-		log.Info("Creating resource", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
-		return r.Create(ctx, obj)
+		log.Info("Creating secret", "name", secret.Name)
+		return r.Create(ctx, secret)
 	} else if err != nil {
 		return err
 	}
 
-	// Update existing resource
-	log.Info("Updating resource", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
-	obj.SetResourceVersion(existing.GetResourceVersion())
-	return r.Update(ctx, obj)
+	if !secretDataEqualForKeys(existing.Data, secret.Data, managedKeys) {
+		log.Info("Updating secret (data changed)", "name", secret.Name, "namespace", secret.Namespace)
+		if existing.Data == nil {
+			existing.Data = make(map[string][]byte)
+		}
+		for _, k := range managedKeys {
+			existing.Data[k] = secret.Data[k]
+		}
+
+		return r.Update(ctx, existing)
+	}
+
+	return nil
 }
 
-// setCondition updates a condition on the CertificateSet status
-func (r *CertificateSetReconciler) setCondition(ctx context.Context, cs *incloudiov1alpha1.CertificateSet, condType string, status metav1.ConditionStatus, reason, message string) error {
+func secretDataEqualForKeys(existing, new map[string][]byte, keys []string) bool {
+	for _, k := range keys {
+		ev, eok := existing[k]
+		nv, nok := new[k]
+		if eok != nok {
+			return false
+		}
+
+		if eok && string(ev) != string(nv) {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *CertificateSetReconciler) deleteSecretIfExists(ctx context.Context, namespace, name string) error {
+	log := logf.FromContext(ctx)
+
+	secret := &corev1.Secret{}
+	err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	log.Info("Deleting secret", "name", name, "namespace", namespace)
+	if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func (r *CertificateSetReconciler) setCondition(cs *incloudiov1alpha1.CertificateSet, condType string, status metav1.ConditionStatus, reason, message string) bool {
+	existing := meta.FindStatusCondition(cs.Status.Conditions, condType)
+
+	if existing != nil &&
+		existing.Status == status &&
+		existing.Reason == reason &&
+		existing.Message == message &&
+		existing.ObservedGeneration == cs.Generation {
+		return false // No change needed
+	}
+
 	meta.SetStatusCondition(&cs.Status.Conditions, metav1.Condition{
 		Type:               condType,
 		Status:             status,
 		ObservedGeneration: cs.Generation,
-		LastTransitionTime: metav1.Now(),
 		Reason:             reason,
 		Message:            message,
 	})
+	return true
+}
 
+func (r *CertificateSetReconciler) updateStatusIfNeeded(ctx context.Context, cs *incloudiov1alpha1.CertificateSet, changed bool) error {
+	if !changed {
+		return nil
+	}
 	return r.Status().Update(ctx, cs)
 }
 
-// reconcileDelete handles cleanup of cross-namespace resources when CertificateSet is deleted.
-// Resources in the same namespace are cleaned up automatically via ownerReferences.
 func (r *CertificateSetReconciler) reconcileDelete(ctx context.Context, cs *incloudiov1alpha1.CertificateSet) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	log.Info("Handling CertificateSet deletion", "name", cs.Name)
 
-	// Delete ArgoCD Secret (cross-namespace, not covered by ownerReference GC)
-	if cs.Spec.ArgocdCluster && cs.Spec.KubeconfigEndpoint != "" {
-		argocdSecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-argocd-cluster", cs.Name),
-				Namespace: ArgoCDNamespace,
-			},
-		}
-		if err := r.Delete(ctx, argocdSecret); err != nil && !apierrors.IsNotFound(err) {
-			log.Error(err, "Failed to delete ArgoCD cluster secret", "name", argocdSecret.Name)
-			return ctrl.Result{}, err
-		}
-		log.Info("Deleted ArgoCD cluster secret", "name", argocdSecret.Name, "namespace", argocdSecret.Namespace)
+	argocdSecretName := fmt.Sprintf("%s-argocd-cluster", cs.Name)
+	if err := r.deleteSecretIfExists(ctx, ArgoCDNamespace, argocdSecretName); err != nil {
+		log.Error(err, "Failed to delete ArgoCD cluster secret", "name", argocdSecretName)
+		return ctrl.Result{}, err
 	}
 
-	// Remove finalizer to allow Kubernetes to complete the deletion
 	controllerutil.RemoveFinalizer(cs, finalizerName)
 	if err := r.Update(ctx, cs); err != nil {
 		return ctrl.Result{}, err
@@ -381,9 +479,9 @@ func (r *CertificateSetReconciler) reconcileDelete(ctx context.Context, cs *incl
 func (r *CertificateSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&incloudiov1alpha1.CertificateSet{}).
+		Owns(&corev1.Secret{}).
 		Owns(&certmanagerv1.Certificate{}).
 		Owns(&certmanagerv1.Issuer{}).
-		Owns(&corev1.Secret{}).
 		Named("certificateset").
 		Complete(r)
 }

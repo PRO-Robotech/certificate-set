@@ -34,14 +34,22 @@ const (
 )
 
 // CertificateSetSpec defines the desired state of CertificateSet
+// +kubebuilder:validation:XValidation:rule="(!self.kubeconfig && !self.argocdCluster) || (has(self.kubeconfigEndpoint) && self.kubeconfigEndpoint != ”)",message="kubeconfigEndpoint is required when kubeconfig or argocdCluster is enabled"
 type CertificateSetSpec struct {
 	// ArgocdCluster enables creation of a secret with cluster credentials for ArgoCD
 	// +optional
 	ArgocdCluster bool `json:"argocdCluster,omitempty"`
 
-	// Environment specifies which certificate set to generate: client, system, or infra
+	// Environment specifies which certificate set to generate: client, system, or infra.
+	// This field is immutable after creation.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="environment is immutable after creation"
 	// +required
 	Environment EnvironmentType `json:"environment"`
+
+	// Kubeconfig enables creation of kubeconfig secret. This field is immutable after creation.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="kubeconfig is immutable after creation"
+	// +required
+	Kubeconfig bool `json:"kubeconfig"`
 
 	// IssuerRef references the cert-manager issuer for main certificates
 	// +required
@@ -51,7 +59,9 @@ type CertificateSetSpec struct {
 	// +optional
 	IssuerRefOidc *IssuerReference `json:"issuerRefOidc,omitempty"`
 
-	// KubeconfigEndpoint is the API server URL for kubeconfig generation
+	// KubeconfigEndpoint is the API server URL for kubeconfig generation.
+	// Once set, this field cannot be changed (but can be initially empty).
+	// +kubebuilder:validation:XValidation:rule="oldSelf == '' || self == oldSelf",message="kubeconfigEndpoint cannot be changed once set"
 	// +optional
 	KubeconfigEndpoint string `json:"kubeconfigEndpoint,omitempty"`
 }

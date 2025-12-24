@@ -4,6 +4,11 @@
 ## Description
 // TODO(user): An in-depth paragraph about your project and overview of use
 
+## Documentation
+
+- `docs/certificateset-crd.md`: поля CRD `CertificateSet`, валидные комбинации, изменяемость после создания
+- `docs/operator-modes.md`: режимы запуска контроллера (`--cluster-wide`, `--namespace`, `--label-selector`)
+
 ## Getting Started
 
 ### Prerequisites
