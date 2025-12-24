@@ -24,8 +24,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}
-          password: ${{ secrets.CUSTOM_DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Устанавливаем buildx + общий builder
       - name: Set up Docker Buildx
@@ -64,7 +64,7 @@ jobs:
           provenance: false
           platforms: linux/amd64
           tags: |
-            ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}/certificate-set:amd64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/certificate-set:amd64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
 
@@ -89,8 +89,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}
-          password: ${{ secrets.CUSTOM_DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Устанавливаем buildx + общий builder
       - name: Set up Docker Buildx
@@ -129,7 +129,7 @@ jobs:
           provenance: false
           platforms: linux/arm64
           tags: |
-            ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}/certificate-set:arm64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/certificate-set:arm64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
 
@@ -157,8 +157,8 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}
-          password: ${{ secrets.CUSTOM_DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -170,19 +170,19 @@ jobs:
       - name: Create and push multi-arch image
         run: |
           docker manifest create \
-            ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}/certificate-set:${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
-            ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}/certificate-set:amd64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
-            ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}/certificate-set:arm64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/certificate-set:${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
+            ${{ secrets.DOCKERHUB_USERNAME }}/certificate-set:amd64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
+            ${{ secrets.DOCKERHUB_USERNAME }}/certificate-set:arm64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }}
 
           docker manifest annotate \
-            ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}/certificate-set:${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
-            ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}/certificate-set:amd64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
+            ${{ secrets.DOCKERHUB_USERNAME }}/certificate-set:${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
+            ${{ secrets.DOCKERHUB_USERNAME }}/certificate-set:amd64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
             --arch amd64
 
           docker manifest annotate \
-            ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}/certificate-set:${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
-            ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}/certificate-set:arm64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
+            ${{ secrets.DOCKERHUB_USERNAME }}/certificate-set:${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
+            ${{ secrets.DOCKERHUB_USERNAME }}/certificate-set:arm64-${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }} \
             --arch arm64
 
           docker manifest push \
-            ${{ secrets.CUSTOM_DOCKERHUB_USERNAME }}/certificate-set:${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/certificate-set:${{ steps.sanitize.outputs.branch }}-${{ steps.short-sha.outputs.sha }}
