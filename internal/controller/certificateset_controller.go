@@ -62,7 +62,7 @@ type CertificateSetReconciler struct {
 	Scheme    *runtime.Scheme
 	APIReader client.Reader // Non-caching reader for direct API server reads
 }
-
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=in-cloud.io,resources=certificatesets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=in-cloud.io,resources=certificatesets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=in-cloud.io,resources=certificatesets/finalizers,verbs=update
