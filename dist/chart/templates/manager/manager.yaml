@@ -72,4 +72,9 @@ spec:
               {{- end }}
             serviceAccountName: certs-controller-manager
             terminationGracePeriodSeconds: 10
+            {{- with .Values.manager.tolerations }}
+            tolerations:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+
             volumes: []
