@@ -42,7 +42,7 @@ jobs:
             NAME="${BRANCH#release/}"
             VERSION="${NAME}-${SHORT_SHA}"
           else
-            VERSION="${IMAGE_TAG}"
+            VERSION="0.0.0-${IMAGE_TAG}"
           fi
 
           echo "Using chart version: $VERSION"
