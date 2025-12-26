@@ -23,6 +23,7 @@ import (
 	"time"
 
 	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -181,9 +182,31 @@ func (r *CertificateSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
-	// All phases complete - update conditions only if changed
+	// Check if all resources in the chain are ready
+	allReady, notReadyReason, err := r.checkAllResourcesReady(ctx, cs)
+	if err != nil {
+		log.Error(err, "Failed to check resources readiness")
+		r.setCondition(cs, ConditionTypeReady, metav1.ConditionFalse, "CheckFailed", err.Error())
+		r.setCondition(cs, ConditionTypeDegraded, metav1.ConditionTrue, "Error", err.Error())
+		_ = r.Status().Update(ctx, cs)
+		return ctrl.Result{}, err
+	}
+
+	if !allReady {
+		log.Info("Waiting for all resources to become ready", "reason", notReadyReason)
+		statusChanged := false
+		statusChanged = r.setCondition(cs, ConditionTypeReady, metav1.ConditionFalse, "WaitingForResources", notReadyReason) || statusChanged
+		statusChanged = r.setCondition(cs, ConditionTypeProgressing, metav1.ConditionTrue, "ResourcesPending", notReadyReason) || statusChanged
+		statusChanged = r.setCondition(cs, ConditionTypeDegraded, metav1.ConditionFalse, "Healthy", "No errors") || statusChanged
+		if err := r.updateStatusIfNeeded(ctx, cs, statusChanged); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+	}
+
+	// All resources are ready - update conditions
 	statusChanged := false
-	statusChanged = r.setCondition(cs, ConditionTypeReady, metav1.ConditionTrue, "AllPhasesComplete", "All certificate resources created successfully") || statusChanged
+	statusChanged = r.setCondition(cs, ConditionTypeReady, metav1.ConditionTrue, "AllResourcesReady", "All certificate resources created and ready") || statusChanged
 	statusChanged = r.setCondition(cs, ConditionTypeDegraded, metav1.ConditionFalse, "Healthy", "No errors") || statusChanged
 	statusChanged = r.setCondition(cs, ConditionTypeProgressing, metav1.ConditionFalse, "Complete", "Reconciliation complete") || statusChanged
 	if err := r.updateStatusIfNeeded(ctx, cs, statusChanged); err != nil {
@@ -303,6 +326,88 @@ func (r *CertificateSetReconciler) isSecretReady(ctx context.Context, namespace,
 	_, hasTLSKey := secret.Data["tls.key"]
 
 	return hasCACrt && hasTLSCrt && hasTLSKey, nil
+}
+
+// isCertificateReady checks if a cert-manager Certificate has Ready=True condition
+func (r *CertificateSetReconciler) isCertificateReady(ctx context.Context, namespace, name string) (bool, error) {
+	cert := &certmanagerv1.Certificate{}
+	err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, cert)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	for _, cond := range cert.Status.Conditions {
+		if cond.Type == certmanagerv1.CertificateConditionReady {
+			return cond.Status == cmmeta.ConditionTrue, nil
+		}
+	}
+	return false, nil
+}
+
+// isIssuerReady checks if a cert-manager Issuer has Ready=True condition
+func (r *CertificateSetReconciler) isIssuerReady(ctx context.Context, namespace, name string) (bool, error) {
+	issuer := &certmanagerv1.Issuer{}
+	err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, issuer)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	for _, cond := range issuer.Status.Conditions {
+		if cond.Type == certmanagerv1.IssuerConditionReady {
+			return cond.Status == cmmeta.ConditionTrue, nil
+		}
+	}
+	return false, nil
+}
+
+// checkAllResourcesReady verifies that all created resources are in Ready state
+// Returns: (allReady, notReadyReason, error)
+func (r *CertificateSetReconciler) checkAllResourcesReady(ctx context.Context, cs *incloudiov1alpha1.CertificateSet) (bool, string, error) {
+	// 1. Check all Certificate resources
+	certNames := []string{fmt.Sprintf("%s-ca", cs.Name)}
+
+	if isSystemOrInfra(cs.Spec.Environment) {
+		certNames = append(certNames,
+			fmt.Sprintf("%s-etcd", cs.Name),
+			fmt.Sprintf("%s-proxy", cs.Name),
+			fmt.Sprintf("%s-ca-oidc", cs.Name),
+		)
+	}
+
+	needsClientCerts := cs.Spec.Kubeconfig || cs.Spec.ArgocdCluster
+	if needsClientCerts {
+		certNames = append(certNames, fmt.Sprintf("%s-super-admin", cs.Name))
+	}
+
+	for _, name := range certNames {
+		ready, err := r.isCertificateReady(ctx, cs.Namespace, name)
+		if err != nil {
+			return false, fmt.Sprintf("error checking Certificate %s: %v", name, err), err
+		}
+		if !ready {
+			return false, fmt.Sprintf("Certificate %s is not ready", name), nil
+		}
+	}
+
+	// 2. Check Issuer (only if client certs are needed)
+	if needsClientCerts {
+		issuerName := fmt.Sprintf("%s-ca", cs.Name)
+		ready, err := r.isIssuerReady(ctx, cs.Namespace, issuerName)
+		if err != nil {
+			return false, fmt.Sprintf("error checking Issuer %s: %v", issuerName, err), err
+		}
+		if !ready {
+			return false, fmt.Sprintf("Issuer %s is not ready", issuerName), nil
+		}
+	}
+
+	return true, "", nil
 }
 
 func (r *CertificateSetReconciler) getCertificateData(ctx context.Context, namespace, name string) (CertificateData, error) {

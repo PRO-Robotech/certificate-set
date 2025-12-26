@@ -7,6 +7,7 @@
 ## Documentation
 
 - `docs/certificateset-crd.md`: поля CRD `CertificateSet`, валидные комбинации, изменяемость после создания
+- `docs/certificateset-conditions.md`: логика Conditions в статусе (Ready, Progressing, Degraded)
 - `docs/operator-modes.md`: режимы запуска контроллера (`--cluster-wide`, `--namespace`, `--label-selector`)
 
 ## Getting Started
