@@ -6,22 +6,34 @@
 
 ## Общая логика контроллера
 
-- **Всегда** создаётся CA:
-  - `Certificate` `${name}-ca`
-  - `Secret` `${name}-ca` (создаёт cert-manager)
+Reconciliation выполняется в 7 шагов:
 
-- Если включён **хотя бы один** флаг `spec.kubeconfig` или `spec.argocdCluster`, то дополнительно создаются:
-  - `Issuer` `${name}-ca`
-  - `Certificate` `${name}-super-admin`
-  - `Secret` `${name}-super-admin` (создаёт cert-manager)
-  - секреты kubeconfig / ArgoCD (см. ниже)
+1. **Создание CA-сертификатов** — всегда создаётся `${name}-ca`, для `system/infra` также `${name}-etcd`, `${name}-proxy`, `${name}-ca-oidc`
+2. **Ожидание CA Secret** — cert-manager должен создать Secret с ключами `ca.crt`, `tls.crt`, `tls.key`
+3. **Создание client-сертификатов** (если `kubeconfig=true` или `argocdCluster=true`):
+   - `Issuer` `${name}-ca` (использует CA Secret)
+   - `Certificate` `${name}-super-admin`
+4. **Ожидание super-admin Secret** — cert-manager должен выпустить клиентский сертификат
+5. **Создание derived-секретов**:
+   - `${name}-kubeconfig` (если `kubeconfig=true`)
+   - `${name}-argocd-cluster` в namespace `beget-argocd` (если `argocdCluster=true`)
+6. **Проверка готовности** — все `Certificate` и `Issuer` должны иметь `Ready=True`
+7. **Обновление статуса** — установка `Ready=True` или `Progressing=True`
 
-- Для `environment: system|infra` дополнительно создаются:
-  - `Certificate` `${name}-etcd`
-  - `Certificate` `${name}-proxy`
-  - `Certificate` `${name}-ca-oidc`
+### Создаваемые ресурсы
 
-Важное ограничение реализации: `Certificate` и `Issuer` создаются **только если их нет** (контроллер не обновляет их при изменении spec).
+| Ресурс | Имя | Когда создаётся |
+|--------|-----|-----------------|
+| Certificate | `${name}-ca` | всегда |
+| Certificate | `${name}-etcd` | `environment: system/infra` |
+| Certificate | `${name}-proxy` | `environment: system/infra` |
+| Certificate | `${name}-ca-oidc` | `environment: system/infra` |
+| Issuer | `${name}-ca` | `kubeconfig=true` или `argocdCluster=true` |
+| Certificate | `${name}-super-admin` | `kubeconfig=true` или `argocdCluster=true` |
+| Secret | `${name}-kubeconfig` | `kubeconfig=true` |
+| Secret | `${name}-argocd-cluster` | `argocdCluster=true` (в ns `beget-argocd`) |
+
+> **Примечание:** Контроллер использует `CreateOrUpdate` для Certificate/Issuer, поэтому изменения в `spec.issuerRef` будут применены к существующим ресурсам.
 
 ---
 
@@ -30,8 +42,8 @@
 | Поле | Тип | Обяз. | Значения / формат | Можно менять после создания | Примечания |
 |------|-----|------:|-------------------|----------------------------|------------|
 | `environment` | string | да | `client`, `system`, `infra` | **нет** | Immutable (CRD CEL) |
-| `issuerRef` | object | да | `name` (обяз.)<br>`apiVersion` (def `cert-manager.io/v1`)<br>`kind` (def `ClusterIssuer`) | да (но эффект ограничен) | Влияет только на новые дочерние ресурсы, уже созданные не будут обновлены |
-| `issuerRefOidc` | object | нет | как `issuerRef` | да (но эффект ограничен) | Практически обязателен для `environment: infra` |
+| `issuerRef` | object | да | `name` (обяз.)<br>`apiVersion` (def `cert-manager.io/v1`)<br>`kind` (def `ClusterIssuer`) | да | Контроллер обновит существующие Certificate через `CreateOrUpdate` |
+| `issuerRefOidc` | object | нет | как `issuerRef` | да | Практически обязателен для `environment: infra`; обновляется аналогично |
 | `kubeconfig` | bool | да | `true` / `false` | **нет** | Immutable (CRD CEL) |
 | `kubeconfigEndpoint` | string | нет* | URL API-сервера, напр. `https://cluster.example.com:6443` | да, **один раз** (если было пусто) | После установки становится immutable (CRD CEL) |
 | `argocdCluster` | bool | нет | `true` / `false` | да | При `false` контроллер удаляет ArgoCD secret |
@@ -73,19 +85,15 @@
 
 ## Что можно менять после создания
 
-- **Нельзя**:
+- **Нельзя** (CRD CEL валидация):
   - `spec.environment` (immutable)
   - `spec.kubeconfig` (immutable)
   - `spec.kubeconfigEndpoint`, если он уже был не пустой (immutable-after-set)
 
-- **Можно** (и отрабатывает контроллер):
+- **Можно** (контроллер применит изменения):
   - `spec.argocdCluster`: `true/false` (при выключении удаляется ArgoCD secret)
-
-- **Формально можно, но эффекта почти не будет** (из-за create-if-not-exists для Certificates/Issuers):
-  - `spec.issuerRef`
-  - `spec.issuerRefOidc`
-
-Если нужно “переиграть” сертификаты с новым `issuerRef/environment` — обычно требуется пересоздание CR или ручное удаление дочерних `Certificate`/`Issuer` (осторожно).
+  - `spec.issuerRef`: контроллер обновит существующие Certificate через `CreateOrUpdate`
+  - `spec.issuerRefOidc`: аналогично, обновит OIDC Certificate
 
 ---
 

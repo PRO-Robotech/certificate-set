@@ -42,12 +42,10 @@
 
 | Reason | Когда возникает |
 |--------|-----------------|
-| `CAFailed` | Ошибка создания CA Certificate или дополнительных сертификатов (etcd, proxy, oidc) |
-| `IssuerFailed` | Ошибка создания Issuer |
-| `Phase2Failed` | Ошибка создания super-admin Certificate |
-| `Phase3Failed` | Ошибка создания kubeconfig/ArgoCD secrets |
+| `CACertificatesFailed` | Ошибка создания CA Certificate или дополнительных сертификатов (ETCD, Proxy, OIDC) |
+| `ClientCertificatesFailed` | Ошибка создания Issuer или super-admin Certificate |
+| `DerivedSecretsFailed` | Ошибка создания kubeconfig или ArgoCD secrets |
 | `ArgoCDCleanupFailed` | Ошибка удаления ArgoCD secret при выключении `argocdCluster` |
-| `ArgoCDNamespaceNotFound` | Namespace `beget-argocd` не существует (при `argocdCluster=true`) |
 | `CheckFailed` | Ошибка проверки готовности ресурсов |
 | `Error` | Общая ошибка |
 
@@ -75,45 +73,47 @@
 
 ---
 
-## Диаграмма переходов
+## Reconciliation Flow
 
 ```
-                    ┌─────────────────────────────┐
-                    │       Reconcile start       │
-                    └─────────────┬───────────────┘
-                                  │
-                    ┌─────────────▼───────────────┐
-                    │      Create resources       │
-                    │   (Certificates, Issuer,    │
-                    │      Secrets)               │
-                    └─────────────┬───────────────┘
-                                  │
-                         error?───┼───no error
-                           │      │
-              ┌────────────▼──┐   │
-              │   Degraded    │   │
-              │   = True      │   │
-              │  (with Reason)│   │
-              └───────────────┘   │
-                                  │
-                    ┌─────────────▼───────────────┐
-                    │  checkAllResourcesReady()   │
-                    │                             │
-                    │  - All Certificates Ready?  │
-                    │  - Issuer Ready?            │
-                    └─────────────┬───────────────┘
-                                  │
-                    ┌─────────────┼─────────────┐
-                    │             │             │
-               not ready       error         ready
-                    │             │             │
-         ┌──────────▼──┐   ┌──────▼─────┐  ┌───▼────────────┐
-         │ Progressing │   │  Degraded  │  │     Ready      │
-         │ = True      │   │  = True    │  │     = True     │
-         │ Ready=False │   │            │  │ Progressing    │
-         │ (requeue    │   │            │  │   = False      │
-         │  5 sec)     │   │            │  │ Degraded=False │
-         └─────────────┘   └────────────┘  └────────────────┘
+Step 1: reconcileCACertificates()
+        ├─ Create ${name}-ca Certificate
+        └─ If system/infra: Create etcd, proxy, oidc Certificates
+                │
+                ▼ error?  ──────────► Degraded=True (CACertificatesFailed)
+                │
+Step 2: Wait for CA Secret (ca.crt, tls.crt, tls.key)
+                │
+                ▼ not ready? ──────► Requeue after 5s
+                │
+Step 3: reconcileClientCertificates() [if kubeconfig || argocdCluster]
+        ├─ Create Issuer ${name}-ca
+        └─ Create ${name}-super-admin Certificate
+                │
+                ▼ error?  ──────────► Degraded=True (ClientCertificatesFailed)
+                │
+Step 4: Wait for super-admin Secret
+                │
+                ▼ not ready? ──────► Requeue after 5s
+                │
+Step 5: reconcileDerivedSecrets()
+        ├─ If kubeconfig: Create ${name}-kubeconfig Secret
+        └─ If argocdCluster: Create ${name}-argocd-cluster Secret
+                │
+                ▼ error?  ──────────► Degraded=True (DerivedSecretsFailed)
+                │
+Step 6: checkAllResourcesReady()
+        ├─ All Certificates have Ready=True?
+        └─ Issuer has Ready=True? (if needed)
+                │
+        ┌───────┴───────┐
+        │               │
+   not ready          ready
+        │               │
+        ▼               ▼
+  Progressing=True   Ready=True
+  Ready=False        Progressing=False
+  (requeue 5s)       Degraded=False
 ```
 
 ---
