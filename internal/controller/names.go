@@ -26,6 +26,7 @@ const (
 	suffixCAOIDC        = "-ca-oidc"
 	suffixKubeconfig    = "-kubeconfig"
 	suffixArgoCDCluster = "-argocd-cluster"
+	suffixSystemIssuer  = "-system-issuer"
 )
 
 // CAName returns the name for CA Certificate, Secret, and Issuer
@@ -63,6 +64,11 @@ func ArgoCDClusterName(cs *incloudiov1alpha1.CertificateSet) string {
 	return cs.Name + suffixArgoCDCluster
 }
 
+// SystemIssuerName returns the name for the System Issuer Certificate
+func SystemIssuerName(cs *incloudiov1alpha1.CertificateSet) string {
+	return cs.Name + suffixSystemIssuer
+}
+
 // AllCertificateNames returns all Certificate names that should be created for this CertificateSet
 func AllCertificateNames(cs *incloudiov1alpha1.CertificateSet) []string {
 	names := []string{CAName(cs)}
@@ -73,6 +79,10 @@ func AllCertificateNames(cs *incloudiov1alpha1.CertificateSet) []string {
 
 	if cs.Spec.Kubeconfig || cs.Spec.ArgocdCluster {
 		names = append(names, SuperAdminName(cs))
+	}
+
+	if cs.Spec.IssuerRefSystemIss != nil {
+		names = append(names, SystemIssuerName(cs))
 	}
 
 	return names
