@@ -88,7 +88,8 @@ func buildCACertificateWithName(cs *incloudiov1alpha1.CertificateSet, name strin
 			RenewBefore: &metav1.Duration{Duration: CertRenewBefore30Days},
 			SecretName:  name,
 			SecretTemplate: &certmanagerv1.CertificateSecretTemplate{
-				Labels: cs.Labels,
+				Labels:      cs.Labels,
+				Annotations: copyAnnotationsForChildResource(cs.Annotations),
 			},
 			Usages: caUsages(),
 		},
@@ -142,7 +143,8 @@ func buildSuperAdminCertificate(cs *incloudiov1alpha1.CertificateSet, issuerName
 			RenewBefore: &metav1.Duration{Duration: CertRenewBefore30Days},
 			SecretName:  name,
 			SecretTemplate: &certmanagerv1.CertificateSecretTemplate{
-				Labels: cs.Labels,
+				Labels:      cs.Labels,
+				Annotations: copyAnnotationsForChildResource(cs.Annotations),
 			},
 			Subject: &certmanagerv1.X509Subject{
 				Organizations: []string{"system:masters"},
@@ -167,7 +169,8 @@ func buildOIDCCertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.C
 			RenewBefore: &metav1.Duration{Duration: CertRenewBefore30Days},
 			SecretName:  name,
 			SecretTemplate: &certmanagerv1.CertificateSecretTemplate{
-				Labels: cs.Labels,
+				Labels:      cs.Labels,
+				Annotations: copyAnnotationsForChildResource(cs.Annotations),
 			},
 		},
 	}
