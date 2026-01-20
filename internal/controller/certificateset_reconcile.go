@@ -37,6 +37,13 @@ func (r *CertificateSetReconciler) reconcileCACertificates(ctx context.Context, 
 		return fmt.Errorf("failed to create CA Certificate: %w", err)
 	}
 
+	// System Issuer certificate (when issuerRefSystemIss is configured)
+	if cs.Spec.IssuerRefSystemIss != nil {
+		if err := r.createOrUpdateCertificate(ctx, cs, buildSystemIssuerCertificate(cs)); err != nil {
+			return fmt.Errorf("failed to create System Issuer Certificate: %w", err)
+		}
+	}
+
 	// Additional CA certificates for system/infra environments
 	if isSystemOrInfra(cs.Spec.Environment) {
 		if err := r.createOrUpdateCertificate(ctx, cs, buildETCDCertificate(cs)); err != nil {

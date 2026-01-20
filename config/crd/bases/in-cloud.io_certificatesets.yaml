@@ -93,6 +93,25 @@ spec:
                 required:
                 - name
                 type: object
+              issuerRefSystemIss:
+                description: IssuerRefSystemIss references the cert-manager issuer
+                  for system issuer certificate
+                properties:
+                  apiVersion:
+                    default: cert-manager.io/v1
+                    description: APIVersion is the API version of the issuer (e.g.,
+                      cert-manager.io/v1)
+                    type: string
+                  kind:
+                    default: ClusterIssuer
+                    description: Kind is the kind of the issuer (Issuer or ClusterIssuer)
+                    type: string
+                  name:
+                    description: Name is the name of the issuer
+                    type: string
+                required:
+                - name
+                type: object
               kubeconfig:
                 description: Kubeconfig enables creation of kubeconfig secret. This
                   field is immutable after creation.
@@ -117,7 +136,7 @@ spec:
             - message: kubeconfigEndpoint is required when kubeconfig or argocdCluster
                 is enabled
               rule: (!self.kubeconfig && (!has(self.argocdCluster) || !self.argocdCluster))
-                || (has(self.kubeconfigEndpoint) && self.kubeconfigEndpoint !='')
+                || (has(self.kubeconfigEndpoint) && self.kubeconfigEndpoint != '')
           status:
             description: status defines the observed state of CertificateSet
             properties:

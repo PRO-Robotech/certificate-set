@@ -34,7 +34,7 @@ const (
 )
 
 // CertificateSetSpec defines the desired state of CertificateSet
-// +kubebuilder:validation:XValidation:rule="(!self.kubeconfig && (!has(self.argocdCluster) || !self.argocdCluster)) || (has(self.kubeconfigEndpoint) && self.kubeconfigEndpoint !='')",message="kubeconfigEndpoint is required when kubeconfig or argocdCluster is enabled"
+// +kubebuilder:validation:XValidation:rule="(!self.kubeconfig && (!has(self.argocdCluster) || !self.argocdCluster)) || (has(self.kubeconfigEndpoint) && self.kubeconfigEndpoint != '')",message="kubeconfigEndpoint is required when kubeconfig or argocdCluster is enabled"
 type CertificateSetSpec struct {
 	// ArgocdCluster enables creation of a secret with cluster credentials for ArgoCD
 	// +optional
@@ -58,6 +58,10 @@ type CertificateSetSpec struct {
 	// IssuerRefOidc references the cert-manager issuer for OIDC certificates (required for infra environment)
 	// +optional
 	IssuerRefOidc *IssuerReference `json:"issuerRefOidc,omitempty"`
+
+	// IssuerRefSystemIss references the cert-manager issuer for system issuer certificate
+	// +optional
+	IssuerRefSystemIss *IssuerReference `json:"issuerRefSystemIss,omitempty"`
 
 	// KubeconfigEndpoint is the API server URL for kubeconfig generation.
 	// Once set, this field cannot be changed (but can be initially empty).

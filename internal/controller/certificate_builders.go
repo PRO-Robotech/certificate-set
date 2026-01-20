@@ -32,6 +32,8 @@ import (
 const (
 	// CertDuration20Years is the default duration for CA certificates (20 years)
 	CertDuration20Years = 175200 * time.Hour
+	// CertDuration5Years is the duration for system issuer certificates (5 years)
+	CertDuration5Years = 43800 * time.Hour
 	// CertDuration1Year is the default duration for client certificates (1 year)
 	CertDuration1Year = 8760 * time.Hour
 	// CertRenewBefore30Days is when to renew certificates (30 days before expiry)
@@ -189,4 +191,35 @@ func buildOIDCCertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.C
 
 func isSystemOrInfra(environment incloudiov1alpha1.EnvironmentType) bool {
 	return environment == incloudiov1alpha1.EnvironmentSystem || environment == incloudiov1alpha1.EnvironmentInfra
+}
+
+// buildSystemIssuerCertificate creates a Certificate signed by the configured ClusterIssuer.
+func buildSystemIssuerCertificate(cs *incloudiov1alpha1.CertificateSet) *certmanagerv1.Certificate {
+	name := SystemIssuerName(cs)
+	gv, _ := schema.ParseGroupVersion(cs.Spec.IssuerRefSystemIss.APIVersion)
+
+	return &certmanagerv1.Certificate{
+		ObjectMeta: buildObjectMeta(cs, name),
+		Spec: certmanagerv1.CertificateSpec{
+			CommonName: name,
+			Duration:   &metav1.Duration{Duration: CertDuration5Years},
+			IsCA:       false,
+			IssuerRef: cmmeta.ObjectReference{
+				Group: gv.Group,
+				Kind:  cs.Spec.IssuerRefSystemIss.Kind,
+				Name:  cs.Spec.IssuerRefSystemIss.Name,
+			},
+			PrivateKey: &certmanagerv1.CertificatePrivateKey{
+				Algorithm:      certmanagerv1.RSAKeyAlgorithm,
+				RotationPolicy: certmanagerv1.RotationPolicyNever,
+				Size:           2048,
+			},
+			RenewBefore: &metav1.Duration{Duration: CertRenewBefore30Days},
+			SecretName:  name,
+			SecretTemplate: &certmanagerv1.CertificateSecretTemplate{
+				Labels:      cs.Labels,
+				Annotations: copyAnnotationsForChildResource(cs.Annotations),
+			},
+		},
+	}
 }
