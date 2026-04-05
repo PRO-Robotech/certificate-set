@@ -151,8 +151,8 @@ func buildSuperAdminCertificate(cs *incloudiov1alpha1.CertificateSet, issuerName
 			},
 			Usages: []certmanagerv1.KeyUsage{
 				certmanagerv1.UsageClientAuth,
-				certmanagerv1.UsageDataEncipherment,
 				certmanagerv1.UsageKeyEncipherment,
+				certmanagerv1.UsageDigitalSignature,
 			},
 		},
 	}
