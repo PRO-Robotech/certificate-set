@@ -368,6 +368,12 @@ func TestBuildSuperAdminCertificate(t *testing.T) {
 			t.Error("Super admin certificate should have UsageClientAuth")
 		}
 	})
+
+	t.Run("usages include digitalSignature", func(t *testing.T) {
+		if !slices.Contains(cert.Spec.Usages, certmanagerv1.UsageDigitalSignature) {
+			t.Error("Super admin certificate should have UsageDigitalSignature")
+		}
+	})
 }
 
 func TestBuildOIDCCertificate(t *testing.T) {
