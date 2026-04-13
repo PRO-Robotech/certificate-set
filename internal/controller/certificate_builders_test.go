@@ -417,6 +417,39 @@ func TestBuildOIDCCertificate(t *testing.T) {
 	})
 }
 
+func TestBuildArgoCDClusterSecret_UsesArgocdEndpoint(t *testing.T) {
+	cs := newTestCertificateSet()
+	cs.Spec.ArgocdEndpoint = "https://cp-control-plane.svc.test-system:26443"
+
+	secret, err := buildArgoCDClusterSecret(cs, CertificateData{CACert: "ca", TLSCert: "cert", TLSKey: "key"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := string(secret.Data["server"])
+	want := "https://cp-control-plane.svc.test-system:26443"
+	if got != want {
+		t.Errorf("server = %q, want %q", got, want)
+	}
+}
+
+func TestBuildArgoCDClusterSecret_Labels(t *testing.T) {
+	cs := newTestCertificateSet()
+	cs.Spec.KubeconfigEndpoint = "https://example.com:6443"
+
+	secret, err := buildArgoCDClusterSecret(cs, CertificateData{CACert: "ca", TLSCert: "cert", TLSKey: "key"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if secret.Labels["argocd.argoproj.io/secret-type"] != "cluster" {
+		t.Error("missing argocd.argoproj.io/secret-type=cluster label")
+	}
+	if secret.Labels["app"] != "myapp" {
+		t.Error("should inherit labels from CertificateSet")
+	}
+}
+
 func TestBuildOIDCCertificate_InfraEnvironment(t *testing.T) {
 	cs := newTestCertificateSet()
 	cs.Spec.Environment = incloudiov1alpha1.EnvironmentInfra

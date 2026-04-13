@@ -123,7 +123,7 @@ func buildArgoCDClusterSecret(cs *incloudiov1alpha1.CertificateSet, certData Cer
 		Data: map[string][]byte{
 			"config": buf.Bytes(),
 			"name":   []byte(cs.Name),
-			"server": []byte(cs.Spec.KubeconfigEndpoint),
+			"server": []byte(cs.Spec.ArgocdEndpoint),
 		},
 	}, nil
 }
