@@ -34,11 +34,17 @@ const (
 )
 
 // CertificateSetSpec defines the desired state of CertificateSet
-// +kubebuilder:validation:XValidation:rule="(!self.kubeconfig && (!has(self.argocdCluster) || !self.argocdCluster)) || (has(self.kubeconfigEndpoint) && self.kubeconfigEndpoint != '')",message="kubeconfigEndpoint is required when kubeconfig or argocdCluster is enabled"
+// +kubebuilder:validation:XValidation:rule="!self.kubeconfig || (has(self.kubeconfigEndpoint) && self.kubeconfigEndpoint != ”)",message="kubeconfigEndpoint is required when kubeconfig is enabled"
+// +kubebuilder:validation:XValidation:rule="(!has(self.argocdCluster) || !self.argocdCluster) || (has(self.argocdEndpoint) && self.argocdEndpoint != ”)",message="argocdEndpoint is required when argocdCluster is enabled"
 type CertificateSetSpec struct {
 	// ArgocdCluster enables creation of a secret with cluster credentials for ArgoCD
 	// +optional
 	ArgocdCluster bool `json:"argocdCluster,omitempty"`
+
+	// ArgocdEndpoint is the server URL used in the ArgoCD cluster secret.
+	// Required when argocdCluster is enabled.
+	// +optional
+	ArgocdEndpoint string `json:"argocdEndpoint,omitempty"`
 
 	// Environment specifies which certificate set to generate: client, system, or infra.
 	// This field is immutable after creation.
